@@ -1,0 +1,18 @@
+:root {
+  font-family: 'Sarabun', -apple-system, 'Segoe UI', system-ui, 'Helvetica Neue', sans-serif;
+  color: #0f172a;
+  background: #eef2f7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+}
+
+button {
+  font-family: inherit;
+}
