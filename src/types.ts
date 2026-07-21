@@ -12,7 +12,11 @@ export type Room = {
   kind?: RoomKind // ชนิด: ห้องปกติ หรือ บันได (ค่าเริ่มต้น = room)
   locked?: boolean // ล็อกตำแหน่ง: ลาก/ปรับขนาดไม่ได้
   floor?: number // ชั้น (1 หรือ 2); ค่าเริ่มต้น = 1
+  // ห้องประกอบ (รูปตัว L ฯลฯ): เก็บหลายสี่เหลี่ยม; x/y/w/h = กรอบนอก (bounding box)
+  parts?: Rect[]
 }
+
+export type Rect = { x: number; y: number; w: number; h: number }
 
 export type Plan = {
   // ขนาดขอบเขตโรงงาน (เมตร)

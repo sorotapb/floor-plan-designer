@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import type { Room, HandleDir } from './types'
-import { clampScale, clientFromMeters, metersFromClient } from './geometry'
+import type { Room, Rect, HandleDir } from './types'
+import { clampScale, clientFromMeters, metersFromClient, partsOf, roomArea } from './geometry'
 
 const PAD = 3 // ระยะขอบรอบโรงงาน (เมตร) เผื่อไว้ใส่ไม้บรรทัด/ป้าย
 const HANDLE_PX = 9 // ขนาดจุดจับ (พิกเซล)
@@ -14,18 +14,18 @@ type Props = {
   subdiv: number // จำนวนช่องย่อยต่อ 1 ช่องกริด (วาดเส้นย่อย)
   rooms: Room[]
   activeFloor: number // ชั้นที่กำลังแก้ไข
-  selectedId: string | null
+  selectedIds: string[]
   scale: number // พิกเซลต่อเมตร
   snapX: number // ระยะ snap แกน X (เมตร); 0 = ไม่ snap
   snapY: number // ระยะ snap แกน Y (เมตร); 0 = ไม่ snap
   fitSignal: number // เพิ่มค่าเพื่อสั่ง "พอดีจอ"
-  onSelect: (id: string | null) => void
+  onSelect: (id: string | null, additive: boolean) => void
   onChangeRoom: (id: string, patch: Partial<Room>) => void
   onScaleChange: (scale: number) => void
 }
 
 type Drag =
-  | { kind: 'move'; id: string; startX: number; startY: number; ox: number; oy: number }
+  | { kind: 'move'; id: string; startX: number; startY: number; ox: number; oy: number; parts?: Rect[] }
   | {
       kind: 'resize'
       id: string
@@ -76,7 +76,7 @@ export default function FloorPlanCanvas({
   subdiv,
   rooms,
   activeFloor,
-  selectedId,
+  selectedIds,
   scale,
   snapX,
   snapY,
@@ -185,7 +185,17 @@ export default function FloorPlanCanvas({
     const dy = m.y - d.startY
 
     if (d.kind === 'move') {
-      onChangeRoom(d.id, { x: snapX_(d.ox + dx), y: snapY_(d.oy + dy) })
+      const nx = snapX_(d.ox + dx)
+      const ny = snapY_(d.oy + dy)
+      if (d.parts) {
+        // ห้องประกอบ: เลื่อนทุกชิ้นตามระยะเดียวกัน
+        const sx = nx - d.ox
+        const sy = ny - d.oy
+        const parts = d.parts.map((p) => ({ ...p, x: +(p.x + sx).toFixed(2), y: +(p.y + sy).toFixed(2) }))
+        onChangeRoom(d.id, { x: nx, y: ny, parts })
+      } else {
+        onChangeRoom(d.id, { x: nx, y: ny })
+      }
       return
     }
 
@@ -242,17 +252,21 @@ export default function FloorPlanCanvas({
 
   function startMove(e: React.PointerEvent, r: Room) {
     e.stopPropagation()
-    onSelect(r.id)
-    if (r.locked) return // ล็อกอยู่ — เลือกได้แต่ลากไม่ได้
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey
+    onSelect(r.id, additive)
+    if (r.locked || additive) return // ล็อก/กำลังเลือกหลายห้อง — ไม่เริ่มลาก
     const m = toMeters(e.clientX, e.clientY)
-    dragRef.current = { kind: 'move', id: r.id, startX: m.x, startY: m.y, ox: r.x, oy: r.y }
+    dragRef.current = {
+      kind: 'move', id: r.id, startX: m.x, startY: m.y, ox: r.x, oy: r.y,
+      parts: r.parts ? r.parts.map((p) => ({ ...p })) : undefined,
+    }
     window.addEventListener('pointermove', onPointerMove)
     window.addEventListener('pointerup', endDrag)
   }
 
   function startResize(e: React.PointerEvent, r: Room, dir: HandleDir) {
     e.stopPropagation()
-    onSelect(r.id)
+    onSelect(r.id, false)
     if (r.locked) return
     const m = toMeters(e.clientX, e.clientY)
     dragRef.current = {
@@ -352,11 +366,42 @@ export default function FloorPlanCanvas({
   // (กล่องกว้าง ≳ 8 ม. จะถึง max เท่ากันหมด, กล่องเล็กลดหลั่นถึง min)
   const NAME_K = 6.5
 
+  // สร้างเรขาคณิตของห้องประกอบ (union ของสี่เหลี่ยม): เซลล์เติมสี + เส้นขอบรอบนอก
+  function compositeGeometry(parts: Rect[]) {
+    const xs = [...new Set(parts.flatMap((p) => [p.x, p.x + p.w]))].sort((a, b) => a - b)
+    const ys = [...new Set(parts.flatMap((p) => [p.y, p.y + p.h]))].sort((a, b) => a - b)
+    const nx = xs.length - 1, ny = ys.length - 1
+    const inside = (cx: number, cy: number) =>
+      parts.some((p) => cx > p.x + 1e-6 && cx < p.x + p.w - 1e-6 && cy > p.y + 1e-6 && cy < p.y + p.h - 1e-6)
+    const filled: boolean[][] = []
+    for (let i = 0; i < nx; i++) {
+      filled[i] = []
+      for (let j = 0; j < ny; j++) filled[i][j] = inside((xs[i] + xs[i + 1]) / 2, (ys[j] + ys[j + 1]) / 2)
+    }
+    const isF = (i: number, j: number) => i >= 0 && i < nx && j >= 0 && j < ny && filled[i][j]
+    const cells: Rect[] = []
+    const edges: { x1: number; y1: number; x2: number; y2: number }[] = []
+    for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) {
+      if (!filled[i][j]) continue
+      const x0 = xs[i], x1 = xs[i + 1], y0 = ys[j], y1 = ys[j + 1]
+      cells.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 })
+      if (!isF(i - 1, j)) edges.push({ x1: x0, y1: y0, x2: x0, y2: y1 })
+      if (!isF(i + 1, j)) edges.push({ x1, y1: y0, x2: x1, y2: y1 })
+      if (!isF(i, j - 1)) edges.push({ x1: x0, y1: y0, x2: x1, y2: y0 })
+      if (!isF(i, j + 1)) edges.push({ x1: x0, y1, x2: x1, y2: y1 })
+    }
+    return { cells, edges }
+  }
+
+  // เลือกสี่เหลี่ยมชิ้นใหญ่สุดไว้วางป้าย (ให้ป้ายอยู่ในรูป ไม่ตกร่องตัว L)
+  function labelBox(r: Room): Rect {
+    const ps = partsOf(r)
+    return ps.reduce((a, b) => (a.w * a.h >= b.w * b.h ? a : b))
+  }
+
   // คำนวณ layout ของป้าย: ฟอนต์อิง "ความกว้างกล่อง" (สม่ำเสมอ), ข้อความยาว wrap/ย่อพอดีเสมอ
-  function labelLayout(r: Room) {
-    const availW = Math.max(0.1, r.w * 0.9)
-    const name = (r.locked ? '🔒 ' : '') + r.name
-    const dim = `${r.w.toFixed(2)} × ${r.h.toFixed(2)} = ${(r.w * r.h).toFixed(1)} ตร.ม.`
+  function labelLayout(box: Rect, name: string, dim: string) {
+    const availW = Math.max(0.1, box.w * 0.9)
 
     const nameFont = Math.min(NAME_MAX, Math.max(NAME_MIN, availW / NAME_K))
     const dimFont = Math.min(DIM_MAX, Math.max(DIM_MIN, nameFont * 0.58))
@@ -366,8 +411,8 @@ export default function FloorPlanCanvas({
     const lh = 1.18
     const gap = dimFont * 0.4
     const totalH = nameLines.length * nameFont * lh + gap + dimLines.length * dimFont * lh
-    const cx = r.x + r.w / 2
-    const top = r.y + r.h / 2 - totalH / 2
+    const cx = box.x + box.w / 2
+    const top = box.y + box.h / 2 - totalH / 2
     const nameStartY = top + nameFont * 0.82
     const dimStartY = top + nameLines.length * nameFont * lh + gap + dimFont * 0.82
     return { nameLines, dimLines, nameFont, dimFont, cx, nameStartY, dimStartY, lh, availW }
@@ -386,7 +431,7 @@ export default function FloorPlanCanvas({
           width={pxW}
           height={pxH}
           viewBox={`${-PAD} ${-PAD} ${vbW} ${vbH}`}
-          onPointerDown={() => onSelect(null)}
+          onPointerDown={() => onSelect(null, false)}
           style={{ touchAction: 'none' }}
         >
           <rect x={0} y={0} width={factoryW} height={factoryH} fill="#ffffff" stroke="none" />
@@ -407,11 +452,13 @@ export default function FloorPlanCanvas({
           {/* เงาห้องของชั้นอื่น (อ้างอิงการจัดวาง) */}
           {ghostRooms.map((r) => (
             <g key={`ghost-${r.id}`} style={{ pointerEvents: 'none' }}>
-              <rect
-                x={r.x} y={r.y} width={r.w} height={r.h}
-                fill={r.color} fillOpacity={0.12}
-                stroke="#cbd5e1" strokeWidth={0.5 / scale} strokeDasharray={`${0.5} ${0.4}`}
-              />
+              {partsOf(r).map((p, pi) => (
+                <rect key={pi}
+                  x={p.x} y={p.y} width={p.w} height={p.h}
+                  fill={r.color} fillOpacity={0.12}
+                  stroke="#cbd5e1" strokeWidth={0.5 / scale} strokeDasharray={`${0.5} ${0.4}`}
+                />
+              ))}
               {r.h * scale > 10 && (
                 <text
                   x={r.x + r.w / 2} y={r.y + r.h / 2 + dimFont * 0.35}
@@ -425,29 +472,52 @@ export default function FloorPlanCanvas({
           ))}
 
           {activeRooms.map((r) => {
-            const selected = r.id === selectedId
+            const selected = selectedIds.includes(r.id)
             const isStairs = r.kind === 'stairs'
             const isMachine = r.kind === 'machine'
-            const L = labelLayout(r)
+            const isComposite = !!(r.parts && r.parts.length > 1)
+            const lbox = labelBox(r)
+            const dimText = isComposite
+              ? `รวม ${roomArea(r).toFixed(1)} ตร.ม.`
+              : `${r.w.toFixed(2)} × ${r.h.toFixed(2)} = ${(r.w * r.h).toFixed(1)} ตร.ม.`
+            const L = labelLayout(lbox, (r.locked ? '🔒 ' : '') + r.name, dimText)
             const machRadius = isMachine ? Math.min(0.4, r.w * 0.12, r.h * 0.12) : undefined
             const iconSize = Math.min(0.9, r.h * 0.35, r.w * 0.35)
+            const comp = isComposite ? compositeGeometry(partsOf(r)) : null
             return (
               <g key={r.id}>
-                <rect
-                  x={r.x}
-                  y={r.y}
-                  width={r.w}
-                  height={r.h}
-                  rx={machRadius}
-                  ry={machRadius}
-                  fill={r.color}
-                  fillOpacity={isMachine ? 0.82 : isStairs ? 0.95 : 0.9}
-                  stroke={selected ? '#2563eb' : isMachine ? '#1f2937' : '#64748b'}
-                  strokeWidth={(selected ? 2 : isMachine ? 1.8 : 1) / scale}
-                  strokeDasharray={r.locked && !selected ? `${0.4} ${0.3}` : undefined}
-                  onPointerDown={(e) => startMove(e, r)}
-                  style={{ cursor: r.locked ? 'pointer' : 'move' }}
-                />
+                {comp ? (
+                  <>
+                    {comp.cells.map((c, i) => (
+                      <rect key={`c${i}`} x={c.x} y={c.y} width={c.w} height={c.h}
+                        fill={r.color} fillOpacity={0.9}
+                        onPointerDown={(e) => startMove(e, r)}
+                        style={{ cursor: r.locked ? 'pointer' : 'move' }} />
+                    ))}
+                    {comp.edges.map((e, i) => (
+                      <line key={`e${i}`} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+                        stroke={selected ? '#2563eb' : '#64748b'} strokeWidth={(selected ? 2 : 1) / scale}
+                        strokeDasharray={r.locked && !selected ? `${0.4} ${0.3}` : undefined}
+                        style={{ pointerEvents: 'none' }} />
+                    ))}
+                  </>
+                ) : (
+                  <rect
+                    x={r.x}
+                    y={r.y}
+                    width={r.w}
+                    height={r.h}
+                    rx={machRadius}
+                    ry={machRadius}
+                    fill={r.color}
+                    fillOpacity={isMachine ? 0.82 : isStairs ? 0.95 : 0.9}
+                    stroke={selected ? '#2563eb' : isMachine ? '#1f2937' : '#64748b'}
+                    strokeWidth={(selected ? 2 : isMachine ? 1.8 : 1) / scale}
+                    strokeDasharray={r.locked && !selected ? `${0.4} ${0.3}` : undefined}
+                    onPointerDown={(e) => startMove(e, r)}
+                    style={{ cursor: r.locked ? 'pointer' : 'move' }}
+                  />
+                )}
 
                 {isStairs && <g style={{ pointerEvents: 'none' }}>{stairSteps(r)}</g>}
                 {isMachine && (
@@ -489,8 +559,8 @@ export default function FloorPlanCanvas({
                   })}
                 </text>
 
-                {/* จุดจับปรับขนาด — ซ่อนถ้าล็อก */}
-                {selected && !r.locked &&
+                {/* จุดจับปรับขนาด — เฉพาะเลือกห้องเดียว, ไม่ล็อก, ไม่ใช่ห้องประกอบ */}
+                {selected && selectedIds.length === 1 && !r.locked && !isComposite &&
                   HANDLES.map(({ dir, cursor }) => {
                     const { cx, cy } = handlePos(r, dir)
                     return (

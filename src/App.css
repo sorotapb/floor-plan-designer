@@ -47,6 +47,8 @@
   line-height: 1;
 }
 .btn:hover { background: #f1f5f9; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:disabled:hover { background: #fff; }
 .btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
 .btn.primary:hover { background: #1d4ed8; }
 .btn.ghost { color: #64748b; }

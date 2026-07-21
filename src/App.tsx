@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Plan, Room } from './types'
 import { SEED_PLAN } from './seed'
-import { clampScale } from './geometry'
+import { clampScale, roomArea, bboxOf, partsOf } from './geometry'
 import FloorPlanCanvas from './FloorPlanCanvas'
 import './App.css'
 
@@ -36,7 +36,18 @@ function newId() {
 
 export default function App() {
   const [plan, setPlan] = useState<Plan>(loadPlan)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null
+
+  // เลือกห้อง: คลิกปกติ = เลือกเดี่ยว, Shift/⌘ คลิก = เลือกเพิ่ม/สลับ
+  const selectRoom = useCallback((id: string | null, additive: boolean) => {
+    if (id == null) { setSelectedIds([]); return }
+    setSelectedIds((prev) =>
+      additive
+        ? prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+        : [id],
+    )
+  }, [])
   const [scale, setScale] = useState(11) // พิกเซลต่อเมตร
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [subdiv, setSubdiv] = useState(4) // ช่องย่อยต่อ 1 ช่องกริด (วาดเส้น + snap)
@@ -66,7 +77,7 @@ export default function App() {
       ...p,
       rooms: [...p.rooms, { id, name: 'ห้องใหม่', x: 0, y: 0, w: plan.gridX * 2, h: plan.gridY * 2, color, floor: activeFloor }],
     }))
-    setSelectedId(id)
+    setSelectedIds([id])
   }
 
   function addStairs() {
@@ -75,7 +86,7 @@ export default function App() {
       ...p,
       rooms: [...p.rooms, { id, name: 'บันได', x: 0, y: 0, w: plan.gridX, h: plan.gridY, color: '#cbd5e1', kind: 'stairs', locked: false, floor: activeFloor }],
     }))
-    setSelectedId(id)
+    setSelectedIds([id])
   }
 
   function addMachine() {
@@ -84,29 +95,63 @@ export default function App() {
       ...p,
       rooms: [...p.rooms, { id, name: 'เครื่องจักร', x: 0, y: 0, w: plan.gridX, h: plan.gridY / 2, color: '#94a3b8', kind: 'machine', floor: activeFloor }],
     }))
-    setSelectedId(id)
+    setSelectedIds([id])
   }
 
   function deleteRoom(id: string) {
     setPlan((p) => ({ ...p, rooms: p.rooms.filter((r) => r.id !== id) }))
-    setSelectedId((s) => (s === id ? null : s))
+    setSelectedIds((prev) => prev.filter((x) => x !== id))
+  }
+
+  function deleteSelected() {
+    if (!selectedIds.length) return
+    setPlan((p) => ({ ...p, rooms: p.rooms.filter((r) => !selectedIds.includes(r.id)) }))
+    setSelectedIds([])
   }
 
   function duplicateRoom(id: string) {
     const src = plan.rooms.find((r) => r.id === id)
     if (!src) return
     const nid = newId()
+    const parts = src.parts ? src.parts.map((p) => ({ ...p, x: p.x + 2, y: p.y + 2 })) : undefined
     setPlan((p) => ({
       ...p,
-      rooms: [...p.rooms, { ...src, id: nid, name: src.name + ' (สำเนา)', x: src.x + 2, y: src.y + 2 }],
+      rooms: [...p.rooms, { ...src, id: nid, name: src.name + ' (สำเนา)', x: src.x + 2, y: src.y + 2, parts }],
     }))
-    setSelectedId(nid)
+    setSelectedIds([nid])
+  }
+
+  // รวมห้องที่เลือก (≥2) เป็นชิ้นเดียว (รูปตัว L ฯลฯ)
+  function mergeSelected() {
+    const sel = plan.rooms.filter((r) => selectedIds.includes(r.id))
+    if (sel.length < 2) return
+    const primary = [...sel].sort((a, b) => roomArea(b) - roomArea(a))[0]
+    const parts = sel.flatMap((r) => partsOf(r))
+    const bb = bboxOf(parts)
+    const merged: Room = { ...primary, parts, x: bb.x, y: bb.y, w: bb.w, h: bb.h }
+    setPlan((p) => ({
+      ...p,
+      rooms: [...p.rooms.filter((r) => !selectedIds.includes(r.id)), merged],
+    }))
+    setSelectedIds([merged.id])
+  }
+
+  // แยกห้องประกอบกลับเป็นสี่เหลี่ยมแยกชิ้น
+  function splitSelected() {
+    const r = plan.rooms.find((x) => x.id === selectedId)
+    if (!r || !r.parts || r.parts.length < 2) return
+    const pieces: Room[] = r.parts.map((pt, i) => ({
+      id: newId(), name: i === 0 ? r.name : `${r.name} ${i + 1}`, color: r.color,
+      kind: r.kind, floor: r.floor, x: pt.x, y: pt.y, w: pt.w, h: pt.h,
+    }))
+    setPlan((p) => ({ ...p, rooms: [...p.rooms.filter((x) => x.id !== r.id), ...pieces] }))
+    setSelectedIds(pieces.map((p) => p.id))
   }
 
   function resetPlan() {
     if (confirm('ล้างแบบทั้งหมดและกลับไปใช้ผังโรงงานเริ่มต้น?')) {
       setPlan(structuredClone(SEED_PLAN))
-      setSelectedId(null)
+      setSelectedIds([])
     }
   }
 
@@ -137,7 +182,7 @@ export default function App() {
         if (!p.gridX) p.gridX = SEED_PLAN.gridX
         if (!p.gridY) p.gridY = SEED_PLAN.gridY
         setPlan(p)
-        setSelectedId(null)
+        setSelectedIds([])
       } catch (err) {
         alert('เปิดไฟล์ไม่สำเร็จ: ' + (err as Error).message)
       }
@@ -180,15 +225,15 @@ export default function App() {
     function onKey(e: KeyboardEvent) {
       const t = e.target as HTMLElement
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length) {
         e.preventDefault()
-        deleteRoom(selectedId)
+        deleteSelected()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId])
+  }, [selectedIds])
 
   const floorRooms = useMemo(
     () => plan.rooms.filter((r) => (r.floor ?? 1) === activeFloor),
@@ -196,11 +241,12 @@ export default function App() {
   )
   const totalRoomArea = useMemo(
     // ไม่รวมเครื่องจักร (ทับบนห้อง จะนับซ้ำ)
-    () => floorRooms.filter((r) => r.kind !== 'machine').reduce((s, r) => s + r.w * r.h, 0),
+    () => floorRooms.filter((r) => r.kind !== 'machine').reduce((s, r) => s + roomArea(r), 0),
     [floorRooms],
   )
   const factoryArea = plan.factoryW * plan.factoryH
   const selected = plan.rooms.find((r) => r.id === selectedId) || null
+  const canMerge = selectedIds.length >= 2
 
   return (
     <div className="app">
@@ -215,7 +261,7 @@ export default function App() {
               <button
                 key={f}
                 className={'btn floor' + (activeFloor === f ? ' active' : '')}
-                onClick={() => { setActiveFloor(f); setSelectedId(null) }}
+                onClick={() => { setActiveFloor(f); setSelectedIds([]) }}
               >
                 ชั้น {f}
               </button>
@@ -224,6 +270,8 @@ export default function App() {
           <button className="btn primary" onClick={addRoom}>+ เพิ่มห้อง</button>
           <button className="btn" onClick={addStairs}>+ บันได</button>
           <button className="btn" onClick={addMachine}>⚙ เครื่องจักร</button>
+          <button className="btn" onClick={mergeSelected} disabled={!canMerge}
+            title="เลือก 2 ห้องขึ้นไป (Shift-คลิก) แล้วรวมเป็นชิ้นเดียว">⧉ รวมห้อง</button>
           <div className="zoom">
             <button className="btn" title="ซูมออก" onClick={() => setScale((s) => clampScale(s / 1.25))}>−</button>
             <span>{Math.round(scale)} px/m</span>
@@ -274,12 +322,12 @@ export default function App() {
             subdiv={subdiv}
             rooms={plan.rooms}
             activeFloor={activeFloor}
-            selectedId={selectedId}
+            selectedIds={selectedIds}
             scale={scale}
             snapX={snapX}
             snapY={snapY}
             fitSignal={fitSignal}
-            onSelect={setSelectedId}
+            onSelect={selectRoom}
             onChangeRoom={changeRoom}
             onScaleChange={(s) => setScale(clampScale(s))}
           />
@@ -331,15 +379,24 @@ export default function App() {
 
           <section className="panel">
             <h3>ห้องที่เลือก</h3>
-            {selected ? (
+            {selectedIds.length >= 2 ? (
+              <div>
+                <p className="hint">เลือก {selectedIds.length} ห้อง</p>
+                <div className="editor-actions">
+                  <button className="btn primary" onClick={mergeSelected}>⧉ รวมเป็นชิ้นเดียว</button>
+                  <button className="btn danger" onClick={deleteSelected}>ลบทั้งหมด</button>
+                </div>
+              </div>
+            ) : selected ? (
               <RoomEditor
                 room={selected}
                 onChange={(patch) => changeRoom(selected.id, patch)}
                 onDuplicate={() => duplicateRoom(selected.id)}
                 onDelete={() => deleteRoom(selected.id)}
+                onSplit={selected.parts && selected.parts.length > 1 ? splitSelected : undefined}
               />
             ) : (
-              <p className="hint">คลิกห้องบนผังเพื่อแก้ไข</p>
+              <p className="hint">คลิกห้องบนผังเพื่อแก้ไข · Shift-คลิกเพื่อเลือกหลายห้อง (แล้วรวมได้)</p>
             )}
           </section>
 
@@ -349,12 +406,12 @@ export default function App() {
               {floorRooms.map((r) => (
                 <li
                   key={r.id}
-                  className={r.id === selectedId ? 'active' : ''}
-                  onClick={() => setSelectedId(r.id)}
+                  className={selectedIds.includes(r.id) ? 'active' : ''}
+                  onClick={(e) => selectRoom(r.id, e.shiftKey || e.metaKey || e.ctrlKey)}
                 >
                   <span className="swatch" style={{ background: r.color }} />
-                  <span className="rname">{r.kind === 'machine' ? '⚙ ' : ''}{r.name}</span>
-                  <span className="rarea">{(r.w * r.h).toFixed(1)} ตร.ม.</span>
+                  <span className="rname">{r.kind === 'machine' ? '⚙ ' : ''}{r.parts && r.parts.length > 1 ? '⧉ ' : ''}{r.name}</span>
+                  <span className="rarea">{roomArea(r).toFixed(1)} ตร.ม.</span>
                 </li>
               ))}
             </ul>
@@ -370,59 +427,79 @@ function RoomEditor({
   onChange,
   onDuplicate,
   onDelete,
+  onSplit,
 }: {
   room: Room
   onChange: (patch: Partial<Room>) => void
   onDuplicate: () => void
   onDelete: () => void
+  onSplit?: () => void
 }) {
+  const isComposite = !!(room.parts && room.parts.length > 1)
+  const area = roomArea(room)
   return (
     <div className="editor">
       <label>
         ชื่อห้อง
         <input value={room.name} onChange={(e) => onChange({ name: e.target.value })} />
       </label>
-      <div className="row2">
-        <label>
-          กว้าง w (ม.)
-          <input
-            type="number" step="0.1" value={room.w}
-            onChange={(e) => onChange({ w: Math.max(0.5, Number(e.target.value) || 0) })}
-          />
-        </label>
-        <label>
-          ยาว h (ม.)
-          <input
-            type="number" step="0.1" value={room.h}
-            onChange={(e) => onChange({ h: Math.max(0.5, Number(e.target.value) || 0) })}
-          />
-        </label>
-      </div>
-      <div className="row2">
-        <label>
-          ตำแหน่ง x (ม.)
-          <input
-            type="number" step="0.1" value={room.x}
-            onChange={(e) => onChange({ x: Number(e.target.value) || 0 })}
-          />
-        </label>
-        <label>
-          ตำแหน่ง y (ม.)
-          <input
-            type="number" step="0.1" value={room.y}
-            onChange={(e) => onChange({ y: Number(e.target.value) || 0 })}
-          />
-        </label>
-      </div>
-      <div className="row2">
-        <label>
-          สี
-          <input type="color" value={room.color} onChange={(e) => onChange({ color: e.target.value })} />
-        </label>
-        <div className="area-big">
-          {(room.w * room.h).toFixed(2)} <small>ตร.ม.</small>
+
+      {isComposite ? (
+        <div className="row2">
+          <div className="area-big" style={{ flex: 2 }}>
+            {area.toFixed(2)} <small>ตร.ม. (ห้องประกอบ)</small>
+          </div>
+          <label>
+            สี
+            <input type="color" value={room.color} onChange={(e) => onChange({ color: e.target.value })} />
+          </label>
         </div>
-      </div>
+      ) : (
+        <>
+          <div className="row2">
+            <label>
+              กว้าง w (ม.)
+              <input
+                type="number" step="0.1" value={room.w}
+                onChange={(e) => onChange({ w: Math.max(0.5, Number(e.target.value) || 0) })}
+              />
+            </label>
+            <label>
+              ยาว h (ม.)
+              <input
+                type="number" step="0.1" value={room.h}
+                onChange={(e) => onChange({ h: Math.max(0.5, Number(e.target.value) || 0) })}
+              />
+            </label>
+          </div>
+          <div className="row2">
+            <label>
+              ตำแหน่ง x (ม.)
+              <input
+                type="number" step="0.1" value={room.x}
+                onChange={(e) => onChange({ x: Number(e.target.value) || 0 })}
+              />
+            </label>
+            <label>
+              ตำแหน่ง y (ม.)
+              <input
+                type="number" step="0.1" value={room.y}
+                onChange={(e) => onChange({ y: Number(e.target.value) || 0 })}
+              />
+            </label>
+          </div>
+          <div className="row2">
+            <label>
+              สี
+              <input type="color" value={room.color} onChange={(e) => onChange({ color: e.target.value })} />
+            </label>
+            <div className="area-big">
+              {area.toFixed(2)} <small>ตร.ม.</small>
+            </div>
+          </div>
+        </>
+      )}
+
       <label className="lock-toggle">
         <input
           type="checkbox"
@@ -431,6 +508,11 @@ function RoomEditor({
         />
         🔒 ล็อกตำแหน่ง (ลาก/ปรับขนาดไม่ได้)
       </label>
+      {onSplit && (
+        <div className="editor-actions">
+          <button className="btn" onClick={onSplit}>⧉ แยกชิ้น</button>
+        </div>
+      )}
       <div className="editor-actions">
         <button className="btn" onClick={onDuplicate}>ทำสำเนา</button>
         <button className="btn danger" onClick={onDelete}>ลบห้อง</button>
