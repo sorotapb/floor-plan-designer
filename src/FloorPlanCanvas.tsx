@@ -322,30 +322,69 @@ export default function FloorPlanCanvas({
     return els
   }
 
-  // คำนวณฟอนต์ให้ชื่อ+ขนาด พอดีในกล่อง (ย่ออัตโนมัติ ไม่ล้นออกนอกกล่อง)
+  // ตัดข้อความขึ้นบรรทัดใหม่ให้พอดีความกว้างที่กำหนด (ตามคำ)
+  function wrapLines(text: string, availW: number, font: number): string[] {
+    const CW = 0.6 // สัดส่วนความกว้างตัวอักษรต่อฟอนต์ (เผื่อภาษาไทย)
+    const maxChars = Math.max(1, Math.floor(availW / (font * CW)))
+    const words = text.split(' ')
+    const lines: string[] = []
+    let cur = ''
+    for (const w of words) {
+      const test = cur ? cur + ' ' + w : w
+      if (!cur || test.length <= maxChars) cur = test
+      else { lines.push(cur); cur = w }
+    }
+    if (cur) lines.push(cur)
+    return lines
+  }
+
+  // ขอบเขตฟอนต์ (เมตร) — คุมให้สม่ำเสมอ ไม่ใหญ่/เล็กตามกล่องมากเกินไป และอ่านได้เสมอ
+  const NAME_MAX = 1.1
+  const NAME_MIN = 0.52
+  const DIM_MAX = 0.62
+  const DIM_MIN = 0.46
+
+  // คำนวณ layout ของป้าย: ชื่อ + ขนาด (ตัดบรรทัดได้, มี min/max font)
   function labelLayout(r: Room) {
-    const CW = 0.62 // สัดส่วนความกว้างตัวอักษรต่อขนาดฟอนต์ (เผื่อภาษาไทย)
-    const MAX = 1.35 // ฟอนต์ชื่อใหญ่สุด (เมตร)
     const availW = Math.max(0.1, r.w * 0.9)
-    const availH = Math.max(0.1, r.h * 0.86)
+    const availH = Math.max(0.1, r.h * 0.9)
     const name = (r.locked ? '🔒 ' : '') + r.name
     const dim = `${r.w.toFixed(2)} × ${r.h.toFixed(2)} = ${(r.w * r.h).toFixed(1)} ตร.ม.`
-    const heightCap = availH / 2.15 // สองบรรทัด
-    const nameWCap = availW / (name.length * CW)
-    let fName = Math.min(MAX, heightCap, nameWCap)
-    let fDim = Math.min(fName * 0.8, availW / (dim.length * CW))
-    let bh = fName + fName * 0.16 + fDim
-    if (bh > availH) { const k = availH / bh; fName *= k; fDim *= k }
-    const gap = fName * 0.16
-    bh = fName + gap + fDim
+
+    // ชื่อ: เริ่มใหญ่สุด แล้วลดจนไม่เกิน 2 บรรทัด (ไม่ต่ำกว่า min)
+    let nameFont = NAME_MAX
+    let nameLines = wrapLines(name, availW, nameFont)
+    while (nameLines.length > 2 && nameFont > NAME_MIN) {
+      nameFont = Math.max(NAME_MIN, Math.round((nameFont - 0.05) * 100) / 100)
+      nameLines = wrapLines(name, availW, nameFont)
+    }
+
+    // ขนาด: อิงจากฟอนต์ชื่อแต่คุมด้วย min/max
+    let dimFont = Math.min(DIM_MAX, Math.max(DIM_MIN, nameFont * 0.6))
+    let dimLines = wrapLines(dim, availW, dimFont)
+    while (dimLines.length > 2 && dimFont > DIM_MIN) {
+      dimFont = Math.max(DIM_MIN, Math.round((dimFont - 0.03) * 100) / 100)
+      dimLines = wrapLines(dim, availW, dimFont)
+    }
+
+    const lh = 1.18
+    const gap = dimFont * 0.35
+    let totalH = nameLines.length * nameFont * lh + gap + dimLines.length * dimFont * lh
+    // ถ้าสูงเกินกล่อง ย่อลง แต่ไม่ต่ำกว่า min (ยอมให้ล้นเล็กน้อยในกล่องจิ๋วเพื่อคงความอ่านออก)
+    if (totalH > availH) {
+      const k = availH / totalH
+      const nf = Math.max(NAME_MIN, nameFont * k)
+      const df = Math.max(DIM_MIN, dimFont * k)
+      if (nf < nameFont) { nameFont = nf; nameLines = wrapLines(name, availW, nameFont) }
+      if (df < dimFont) { dimFont = df; dimLines = wrapLines(dim, availW, dimFont) }
+      totalH = nameLines.length * nameFont * lh + gap + dimLines.length * dimFont * lh
+    }
+
     const cx = r.x + r.w / 2
-    const top = r.y + r.h / 2 - bh / 2
-    const nameY = top + fName * 0.82
-    const dimY = top + fName + gap + fDim * 0.82
-    // ล็อกความกว้างไม่ให้ล้น เมื่อข้อความยาวจนถูกจำกัดด้วยความกว้าง
-    const nameLen = nameWCap <= Math.min(MAX, heightCap) ? availW : undefined
-    const dimLen = dim.length * CW * fDim > availW ? availW : undefined
-    return { name, dim, fName, fDim, cx, nameY, dimY, nameLen, dimLen }
+    const top = r.y + r.h / 2 - totalH / 2
+    const nameStartY = top + nameFont * 0.82
+    const dimStartY = top + nameLines.length * nameFont * lh + gap + dimFont * 0.82
+    return { nameLines, dimLines, nameFont, dimFont, cx, nameStartY, dimStartY, lh }
   }
 
   return (
@@ -417,18 +456,20 @@ export default function FloorPlanCanvas({
                 {isStairs && <g style={{ pointerEvents: 'none' }}>{stairSteps(r)}</g>}
 
                 <text
-                  x={L.cx} y={L.nameY} fontSize={L.fName} textAnchor="middle" fill="#0f172a"
-                  textLength={L.nameLen} lengthAdjust={L.nameLen ? 'spacingAndGlyphs' : undefined}
+                  x={L.cx} y={L.nameStartY} fontSize={L.nameFont} textAnchor="middle" fill="#0f172a"
                   style={{ pointerEvents: 'none', fontWeight: 600 }}
                 >
-                  {L.name}
+                  {L.nameLines.map((ln, i) => (
+                    <tspan key={i} x={L.cx} dy={i === 0 ? 0 : L.nameFont * L.lh}>{ln}</tspan>
+                  ))}
                 </text>
                 <text
-                  x={L.cx} y={L.dimY} fontSize={L.fDim} textAnchor="middle" fill="#475569"
-                  textLength={L.dimLen} lengthAdjust={L.dimLen ? 'spacingAndGlyphs' : undefined}
+                  x={L.cx} y={L.dimStartY} fontSize={L.dimFont} textAnchor="middle" fill="#475569"
                   style={{ pointerEvents: 'none' }}
                 >
-                  {L.dim}
+                  {L.dimLines.map((ln, i) => (
+                    <tspan key={i} x={L.cx} dy={i === 0 ? 0 : L.dimFont * L.lh}>{ln}</tspan>
+                  ))}
                 </text>
 
                 {/* จุดจับปรับขนาด — ซ่อนถ้าล็อก */}
