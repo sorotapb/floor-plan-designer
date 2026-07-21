@@ -78,6 +78,15 @@ export default function App() {
     setSelectedId(id)
   }
 
+  function addMachine() {
+    const id = newId()
+    setPlan((p) => ({
+      ...p,
+      rooms: [...p.rooms, { id, name: 'เครื่องจักร', x: 0, y: 0, w: plan.gridX, h: plan.gridY / 2, color: '#94a3b8', kind: 'machine', floor: activeFloor }],
+    }))
+    setSelectedId(id)
+  }
+
   function deleteRoom(id: string) {
     setPlan((p) => ({ ...p, rooms: p.rooms.filter((r) => r.id !== id) }))
     setSelectedId((s) => (s === id ? null : s))
@@ -186,7 +195,8 @@ export default function App() {
     [plan.rooms, activeFloor],
   )
   const totalRoomArea = useMemo(
-    () => floorRooms.reduce((s, r) => s + r.w * r.h, 0),
+    // ไม่รวมเครื่องจักร (ทับบนห้อง จะนับซ้ำ)
+    () => floorRooms.filter((r) => r.kind !== 'machine').reduce((s, r) => s + r.w * r.h, 0),
     [floorRooms],
   )
   const factoryArea = plan.factoryW * plan.factoryH
@@ -213,6 +223,7 @@ export default function App() {
           </div>
           <button className="btn primary" onClick={addRoom}>+ เพิ่มห้อง</button>
           <button className="btn" onClick={addStairs}>+ บันได</button>
+          <button className="btn" onClick={addMachine}>⚙ เครื่องจักร</button>
           <div className="zoom">
             <button className="btn" title="ซูมออก" onClick={() => setScale((s) => clampScale(s / 1.25))}>−</button>
             <span>{Math.round(scale)} px/m</span>
@@ -342,7 +353,7 @@ export default function App() {
                   onClick={() => setSelectedId(r.id)}
                 >
                   <span className="swatch" style={{ background: r.color }} />
-                  <span className="rname">{r.name}</span>
+                  <span className="rname">{r.kind === 'machine' ? '⚙ ' : ''}{r.name}</span>
                   <span className="rarea">{(r.w * r.h).toFixed(1)} ตร.ม.</span>
                 </li>
               ))}

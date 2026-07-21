@@ -299,7 +299,12 @@ export default function FloorPlanCanvas({
   const handleSize = HANDLE_PX / scale
   const dimFont = Math.min(1.3, 11 / scale)
 
-  const activeRooms = rooms.filter((r) => (r.floor ?? 1) === activeFloor)
+  const activeAll = rooms.filter((r) => (r.floor ?? 1) === activeFloor)
+  // เครื่องจักรวาดหลังสุด = อยู่บนห้องเสมอ
+  const activeRooms = [
+    ...activeAll.filter((r) => r.kind !== 'machine'),
+    ...activeAll.filter((r) => r.kind === 'machine'),
+  ]
   const ghostRooms = rooms.filter((r) => (r.floor ?? 1) !== activeFloor)
 
   // ลายบันได (ขั้นบันได + ลูกศรขึ้น)
@@ -422,7 +427,10 @@ export default function FloorPlanCanvas({
           {activeRooms.map((r) => {
             const selected = r.id === selectedId
             const isStairs = r.kind === 'stairs'
+            const isMachine = r.kind === 'machine'
             const L = labelLayout(r)
+            const machRadius = isMachine ? Math.min(0.4, r.w * 0.12, r.h * 0.12) : undefined
+            const iconSize = Math.min(0.9, r.h * 0.35, r.w * 0.35)
             return (
               <g key={r.id}>
                 <rect
@@ -430,16 +438,27 @@ export default function FloorPlanCanvas({
                   y={r.y}
                   width={r.w}
                   height={r.h}
+                  rx={machRadius}
+                  ry={machRadius}
                   fill={r.color}
-                  fillOpacity={isStairs ? 0.95 : 0.9}
-                  stroke={selected ? '#2563eb' : '#64748b'}
-                  strokeWidth={(selected ? 2 : 1) / scale}
+                  fillOpacity={isMachine ? 0.82 : isStairs ? 0.95 : 0.9}
+                  stroke={selected ? '#2563eb' : isMachine ? '#1f2937' : '#64748b'}
+                  strokeWidth={(selected ? 2 : isMachine ? 1.8 : 1) / scale}
                   strokeDasharray={r.locked && !selected ? `${0.4} ${0.3}` : undefined}
                   onPointerDown={(e) => startMove(e, r)}
                   style={{ cursor: r.locked ? 'pointer' : 'move' }}
                 />
 
                 {isStairs && <g style={{ pointerEvents: 'none' }}>{stairSteps(r)}</g>}
+                {isMachine && (
+                  <text
+                    x={r.x + iconSize * 0.35} y={r.y + iconSize}
+                    fontSize={iconSize} fill="#1f2937"
+                    style={{ pointerEvents: 'none' }}
+                  >
+                    ⚙
+                  </text>
+                )}
 
                 <text
                   x={L.cx} y={L.nameStartY} fontSize={L.nameFont} textAnchor="middle" fill="#0f172a"

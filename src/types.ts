@@ -1,5 +1,5 @@
 // ทุกหน่วยเป็น "เมตร" (m) — พื้นที่คำนวณเป็น ตร.ม. (m²)
-export type RoomKind = 'room' | 'stairs'
+export type RoomKind = 'room' | 'stairs' | 'machine'
 
 export type Room = {
   id: string
