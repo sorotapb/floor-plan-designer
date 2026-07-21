@@ -6,7 +6,7 @@ import FloorPlanCanvas from './FloorPlanCanvas'
 import './App.css'
 
 // เลื่อนเลขเวอร์ชันเมื่อเปลี่ยน draft เริ่มต้น เพื่อให้ browser โหลดผังใหม่แทนของเก่าที่เซฟไว้
-const STORAGE_KEY = 'floor-plan-designer:v4'
+const STORAGE_KEY = 'floor-plan-designer:v5'
 
 const PALETTE = [
   '#bfdbfe', '#fde68a', '#c7f9cc', '#fbcfe8',

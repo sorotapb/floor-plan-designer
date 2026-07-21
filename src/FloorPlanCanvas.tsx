@@ -297,7 +297,6 @@ export default function FloorPlanCanvas({
   const yLines = modY
 
   const handleSize = HANDLE_PX / scale
-  const nameFont = Math.min(1.6, 13 / scale)
   const dimFont = Math.min(1.3, 11 / scale)
 
   const activeRooms = rooms.filter((r) => (r.floor ?? 1) === activeFloor)
@@ -312,15 +311,41 @@ export default function FloorPlanCanvas({
     if (r.h >= r.w) {
       for (let i = 1; i < n; i++) {
         const yy = r.y + (r.h * i) / n
-        els.push(<line key={`s${i}`} x1={r.x} y1={yy} x2={r.x + r.w} y2={yy} stroke="#64748b" strokeWidth={sw} />)
+        els.push(<line key={`s${i}`} x1={r.x} y1={yy} x2={r.x + r.w} y2={yy} stroke="#a9b6c6" strokeWidth={sw} />)
       }
     } else {
       for (let i = 1; i < n; i++) {
         const xx = r.x + (r.w * i) / n
-        els.push(<line key={`s${i}`} x1={xx} y1={r.y} x2={xx} y2={r.y + r.h} stroke="#64748b" strokeWidth={sw} />)
+        els.push(<line key={`s${i}`} x1={xx} y1={r.y} x2={xx} y2={r.y + r.h} stroke="#a9b6c6" strokeWidth={sw} />)
       }
     }
     return els
+  }
+
+  // คำนวณฟอนต์ให้ชื่อ+ขนาด พอดีในกล่อง (ย่ออัตโนมัติ ไม่ล้นออกนอกกล่อง)
+  function labelLayout(r: Room) {
+    const CW = 0.62 // สัดส่วนความกว้างตัวอักษรต่อขนาดฟอนต์ (เผื่อภาษาไทย)
+    const MAX = 1.35 // ฟอนต์ชื่อใหญ่สุด (เมตร)
+    const availW = Math.max(0.1, r.w * 0.9)
+    const availH = Math.max(0.1, r.h * 0.86)
+    const name = (r.locked ? '🔒 ' : '') + r.name
+    const dim = `${r.w.toFixed(2)} × ${r.h.toFixed(2)} = ${(r.w * r.h).toFixed(1)} ตร.ม.`
+    const heightCap = availH / 2.15 // สองบรรทัด
+    const nameWCap = availW / (name.length * CW)
+    let fName = Math.min(MAX, heightCap, nameWCap)
+    let fDim = Math.min(fName * 0.8, availW / (dim.length * CW))
+    let bh = fName + fName * 0.16 + fDim
+    if (bh > availH) { const k = availH / bh; fName *= k; fDim *= k }
+    const gap = fName * 0.16
+    bh = fName + gap + fDim
+    const cx = r.x + r.w / 2
+    const top = r.y + r.h / 2 - bh / 2
+    const nameY = top + fName * 0.82
+    const dimY = top + fName + gap + fDim * 0.82
+    // ล็อกความกว้างไม่ให้ล้น เมื่อข้อความยาวจนถูกจำกัดด้วยความกว้าง
+    const nameLen = nameWCap <= Math.min(MAX, heightCap) ? availW : undefined
+    const dimLen = dim.length * CW * fDim > availW ? availW : undefined
+    return { name, dim, fName, fDim, cx, nameY, dimY, nameLen, dimLen }
   }
 
   return (
@@ -357,10 +382,11 @@ export default function FloorPlanCanvas({
                 fill={r.color} fillOpacity={0.12}
                 stroke="#cbd5e1" strokeWidth={0.5 / scale} strokeDasharray={`${0.5} ${0.4}`}
               />
-              {r.h * scale > 16 && r.w * scale > 26 && (
+              {r.h * scale > 10 && (
                 <text
                   x={r.x + r.w / 2} y={r.y + r.h / 2 + dimFont * 0.35}
-                  fontSize={dimFont} textAnchor="middle" fill="#b6c0cd"
+                  fontSize={Math.min(dimFont, (r.w * 0.9) / (r.name.length * 0.62), r.h * 0.5)}
+                  textAnchor="middle" fill="#b6c0cd"
                 >
                   {r.name}
                 </text>
@@ -371,11 +397,7 @@ export default function FloorPlanCanvas({
           {activeRooms.map((r) => {
             const selected = r.id === selectedId
             const isStairs = r.kind === 'stairs'
-            // ซ่อนป้ายเมื่อห้องเล็กเกินกว่าจะอ่านได้ที่ระดับซูมนี้
-            const wPx = r.w * scale
-            const hPx = r.h * scale
-            const showName = hPx > 16 && wPx > 26
-            const showDim = !isStairs && hPx > 34 && wPx > 78
+            const L = labelLayout(r)
             return (
               <g key={r.id}>
                 <rect
@@ -394,30 +416,20 @@ export default function FloorPlanCanvas({
 
                 {isStairs && <g style={{ pointerEvents: 'none' }}>{stairSteps(r)}</g>}
 
-                {(showName || isStairs) && (
-                  <text
-                    x={r.x + r.w / 2}
-                    y={isStairs ? r.y + r.h + dimFont * 1.1 : r.y + r.h / 2 - (showDim ? dimFont * 0.2 : -dimFont * 0.35)}
-                    fontSize={nameFont}
-                    textAnchor="middle"
-                    fill="#0f172a"
-                    style={{ pointerEvents: 'none', fontWeight: 600 }}
-                  >
-                    {r.locked ? '🔒 ' : ''}{r.name}
-                  </text>
-                )}
-                {showDim && (
-                  <text
-                    x={r.x + r.w / 2}
-                    y={r.y + r.h / 2 + nameFont}
-                    fontSize={dimFont}
-                    textAnchor="middle"
-                    fill="#475569"
-                    style={{ pointerEvents: 'none' }}
-                  >
-                    {r.w.toFixed(2)} × {r.h.toFixed(2)} = {(r.w * r.h).toFixed(1)} ตร.ม.
-                  </text>
-                )}
+                <text
+                  x={L.cx} y={L.nameY} fontSize={L.fName} textAnchor="middle" fill="#0f172a"
+                  textLength={L.nameLen} lengthAdjust={L.nameLen ? 'spacingAndGlyphs' : undefined}
+                  style={{ pointerEvents: 'none', fontWeight: 600 }}
+                >
+                  {L.name}
+                </text>
+                <text
+                  x={L.cx} y={L.dimY} fontSize={L.fDim} textAnchor="middle" fill="#475569"
+                  textLength={L.dimLen} lengthAdjust={L.dimLen ? 'spacingAndGlyphs' : undefined}
+                  style={{ pointerEvents: 'none' }}
+                >
+                  {L.dim}
+                </text>
 
                 {/* จุดจับปรับขนาด — ซ่อนถ้าล็อก */}
                 {selected && !r.locked &&
